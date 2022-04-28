@@ -1,0 +1,318 @@
+---
+title: "Thesis"
+author: "Katie"
+date: '2022-03-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(kml)
+library(forcats)
+library(dplyr)
+library(psych)
+
+set.seed(10101)
+
+
+```
+
+#Data preparation
+```{r}
+CLHLSdeceasedData <- readRDS("~/Desktop/clhls datasets/CLEANED/CLHLSdeceasedData.rds")
+#Creating new variables in data - grouped by ID, created n which counts no. of waves participant was in, reverses LS measure (which was previouslt 5- very bad, 1- very good), turns dtd from difftime variable to numeric variable. 
+#NEW! turned ids from num into factor
+#need to learn group()/ungroup()
+data <- CLHLSdeceasedData %>%
+  group_by(id) %>% 
+  mutate(n = n(),
+         ls = 6 - b11,
+         dtd = as.numeric(daysBeforeDeath),
+         id = factor(id)) %>% 
+  ungroup() 
+
+```
+
+#Generating sample trajectories diagram 
+```{r}
+
+#Creating new variable sample.id which extracts only measurements 4000 days and less to death, groups measurements by id, creates new n2 to replace n, only selects for n2>4 i.e people with more 5 or more waves of data. 
+#need to learn distinct(), sample_n()
+sample.id <- data %>% 
+  filter(dtd < 4001) %>% 
+  group_by(id) %>% 
+  mutate(n2 = n()) %>% 
+  filter(n2 > 4) %>%
+  ungroup() %>% 
+  distinct(id) %>% 
+  sample_n(.,20)
+
+samptrajs <- sample.id %>% 
+  left_join(., data, by = "id") %>% 
+  #filter(n > 3) %>% 
+  mutate(id = factor(id)) %>% 
+  ggplot(aes(x = -dtd, y = ls, color = id)) +
+  geom_line(aes(x = jitter(-dtd, 5), y = jitter(ls, 1), color = id),
+    stat = "smooth", method="loess",se=F, alpha = 0.4) +
+  ylim(1,5) +
+  xlim(-4000,0) +
+  theme_classic() +
+  theme(legend.position = "none")
+  
+samptrajs
+```
+
+#KML data prep
+```{r}
+#Creating dataframe with just id, b11, days before death (variables long)
+v_long <- data %>% select(id, b11, daysBeforeDeath)
+#Creating long dataframe with transformed variables to make them easier, i.e dtd --> years rounded up/down, ls is reversed. Then b11 and dbd removed.
+ls_long <- v_long %>% mutate(ls = 6 - b11,
+                        dtd = round(as.numeric(daysBeforeDeath)/365, 0)) %>%
+  select(-b11, -daysBeforeDeath)
+#Ask Q later - do we wanna try using days instead of years? can klm still work?
+#Making ls_long wide, s.t years are column names. Removing people who have -1 for dtd for some reason, replacing dtd with dtdstr which turns it into a string variable of the pattern dtd*, removes old dtd, arranges dtdstr, and then turns it wide - getting column titles from dtdstr, values from ls.
+ls_wide <- ls_long %>% filter(dtd > -1) %>%
+  mutate(dtdstr = paste0("dtd",dtd)) %>%
+  select(-dtd) %>%
+  arrange(dtdstr) %>%
+  pivot_wider(., names_from = dtdstr, values_from = ls)%>%
+  select(1,15,13,12,11,10,9,8,7,6,5,4,22,21,20,19,18,17,16,14,3,2)
+#CRITICAL! Code below is contingent on the columns being in the right order i.e dtd20 ... dtd0
+#ls_wide contains ls organised by dtdyr, by ID no minimum wave count
+```
+#KML all 20 years, parts of all waves
+```{r}
+cld20 <- cld(ls_wide, idAll = ls_wide$id, timeInData = c(2:22))
+kml20 <- kml(cld20)
+```
+#KMLjust last 10 years, parts of all waves
+```{r}
+cld10 <- cld(ls_wide, idAll = ls_wide$id, timeInData = c(12:22))
+kml10 <- kml(cld10)
+```
+
+#Creating mergedn3, same as ls_wide except min wave count of 3
+```{r}
+#Creating new n dataset that will contain IDs and no. of waves participant took part in
+n <- data %>%
+#  filter(daysBeforeDeath < 4001) %>% This removes datapoints, not participants 
+  group_by(id) %>%
+  mutate(n = n()) %>%
+  ungroup() %>%
+  select(id, n) %>%
+  distinct()
+#Filtering for participants who only have more than 3 waves of data
+n3 <- n %>% filter(n >= 3)
+#Merging n3 with ls_wide so now we have a dataframe that includes id, ls by years to death, and no. of waves participant took part in
+mergedn3 <- n3 %>% left_join(., ls_wide, by = "id")
+```
+#KML all 20 yrs, parts w 3+ waves
+```{r}
+cld20n3 <- cld(mergedn3, idAll = mergedn3$id, timeInData = c(3:23))
+kml20n3 <- kml(cld20n3)
+choice(cld20n3, "bmp")
+```
+#KML just last 10 yrs, parts w 3+ waves
+```{r}
+cld10n3 <- cld(mergedn3, idAll = mergedn3$id, timeInData = c(13:23))
+kml10n3 <- kml(cld10n3)
+choice(cld10n3, "bmp")
+```
+
+#KML 8 years, parts w 3+ waves
+```{r}
+cld8n3 <- cld(mergedn3, idAll = mergedn3$id, timeInData = c(15:23))
+kml8n3 <- kml(cld8n3)
+```
+
+#KML 8 years, all parts
+```{r}
+cld8 <- cld(ls_wide, idAll = ls_wide$id, timeInData = c(14:22))
+kml8 <- kml(cld8)
+```
+
+
+#cleaning for log regression
+```{r}
+#Turning numerical vars into factors
+data$f41 <- as.factor(data$f41)
+data$residenc <- as.factor(data$residenc)
+data$dLivarr <- as.factor(data$dLivarr)
+data$dPlace <- as.factor(data$dPlace)
+```
+
+#Creating new Katz' ADL sum variable
+```{r}
+#DO NOT WANT KATZ ADL SCORES TO BE FACTORS, but you do want to change the vals s.t 1 = without assistance and 0 = one part assistance or more than one part assistance
+data$e1[data$e1 == 2] <- 0
+data$e1[data$e1 == 3] <- 0
+
+data$e2[data$e2 == 2] <- 0
+data$e2[data$e2 == 3] <- 0
+
+data$e3[data$e3 == 2] <- 0
+data$e3[data$e3 == 3] <- 0
+
+data$e4[data$e4 == 2] <- 0
+data$e4[data$e4 == 3] <- 0
+
+data$e5[data$e5 == 2] <- 0
+data$e5[data$e5 == 3] <- 0
+
+data$e6[data$e6 == 2] <- 0
+data$e6[data$e6 == 3] <- 0
+
+#new variable, ADLsum
+data$ADLsum <- data$e1 + data$e2 + data$e3 + data$e4 + data$e5 + data$e6
+```
+
+#replacing values
+```{r}
+
+#Replacing values
+data$a1 <- ifelse(test=data$a1 == 1, yes="M", no="F")
+data$f41 <- fct_collapse(data$f41, "married" = c("1"), "separated" = c("2","3"), "widowed" = c("4"), "nevermarried" = c("5"))
+data$residenc <- fct_collapse(data$residenc, "urban" = c("1", "2"), "rural" = c("3"))
+data$dLivarr <- fct_collapse(data$dLivarr, "instit" = c("0"), "alone" = c("1", "2"), "spouse" = c("3"), "wcaregiver" = c("4", "6", "7"), "grandchi" = c("5"))
+data$dPlace <- fct_collapse(data$dPlace, "home" = c("1"), "hospital" = c("2"), "instit" = c("3"), "others" = c("4"))
+```
+
+#Merging classification
+```{r}
+#New dataframe to cut out irrelevant stuff + add cluster classifications
+#EOL, death proxy variables - dLivarr, dPlace, dIncome
+#Earliest value - a1, f41, f1
+#Last recorded - residenc, ADLsum, gIll
+#ok let's do first recorded first ok?
+datalogit <- select(data, c(id, wave, a1, f41, f1, residenc, dIncome, dLivarr, dPlace, ADLsum, dtd, n, gIll))
+#wave was char lol converting it to num 
+datalogit <- datalogit %>% mutate(wave = as.numeric(wave))
+#Create new frame that contains just wave and id + earliest possible wave 
+datalogit_id_wave <- select(datalogit, c(id, wave)) %>% group_by(id) %>% slice_min(n = 1, wave)
+#Create copy of datalogit frame 
+datalogit1 <- datalogit
+#Merge earliest observation frame + datalogit1 frame to get all covariate data for first observation
+datalogit1 <- datalogit1 %>% right_join(datalogit_id_wave)
+#thank you god (and kenith)
+
+```
+#Getting the classification data with id as a sep column
+```{r}
+cld20clust <- as.data.frame(getClusters(cld20, 2)) 
+cld20clust$id = cld20@idAll
+cld8clust <- as.data.frame(getClusters(cld8, 2)) 
+cld8clust$id = cld8@idAll
+cld20n3clust <- as.data.frame(getClusters(cld20n3, 2)) 
+cld20n3clust$id = cld20n3@idAll
+cld8n3clust <- as.data.frame(getClusters(cld8n3, 2)) 
+cld8n3clust$id = cld8n3@idAll
+#NOTE - for CLD8 groups are reversed such that the usual 'B' trajectory i.e so-so is now A (i.e majority)
+#Subsequently for datalogitFULL, cld8 is recoded s.t A = B and vice versa
+```
+#Adding classification data to datalogit1
+```{r}
+datalogit2 <- merge(datalogit1, cld8clust, by = "id", all = TRUE) 
+datalogit3 <- merge(datalogit2, cld8n3clust, by = "id", all = TRUE) 
+datalogit4 <- merge(datalogit3, cld20clust, by = "id", all = TRUE)
+datalogitFULL <- merge(datalogit4, cld20n3clust, by = "id", all = TRUE) 
+#datalogitFULL contains the classification of each participant for each cut of the model (i.e 20 years all waves, 20 years 3+ waves, 8 years all waves, 8 years 3+ waves)
+
+#renaming columns 
+names(datalogitFULL)[names(datalogitFULL) == "getClusters(cld8, 2)"] <- "cld8"
+names(datalogitFULL)[names(datalogitFULL) == "getClusters(cld8n3, 2)"] <- "cld8n3"
+names(datalogitFULL)[names(datalogitFULL) == "getClusters(cld20, 2)"] <- "cld20"
+names(datalogitFULL)[names(datalogitFULL) == "getClusters(cld20n3, 2)"] <- "cld20n3"
+
+#Converting into no.s for logit reg
+datalogitFULL$cld20 <- as.numeric(datalogitFULL$cld20) 
+datalogitFULL$cld20n3 <- as.numeric(datalogitFULL$cld20n3)
+datalogitFULL$cld8 <- as.numeric(datalogitFULL$cld8)
+datalogitFULL$cld8n3 <- as.numeric(datalogitFULL$cld8n3)
+#converting to 1 (A) and 0 (B)
+datalogitFULL['cld20'][datalogitFULL['cld20'] == 2] <- 0
+datalogitFULL['cld20n3'][datalogitFULL['cld20n3'] == 2] <- 0
+datalogitFULL['cld8'][datalogitFULL['cld8'] == 1] <- 0
+datalogitFULL['cld8'][datalogitFULL['cld8'] == 2] <- 1
+datalogitFULL['cld8n3'][datalogitFULL['cld8n3'] == 2] <- 0
+```
+
+##Uh descriptive stats - what makes up A and B (and unclassified) 
+#FOR ALL PARTS 20 YEARS
+```{r}
+describeBy(datalogitFULL, group = datalogitFULL$cld20)
+```
+#FOR PARTS W. 3+, 20 YEARS
+```{r}
+describeBy(datalogitFULL, group = datalogitFULL$cld20n3)
+```
+
+#FOR ALL PARTS 8 YEARS
+```{r}
+describeBy(datalogitFULL, group = datalogitFULL$cld8new)
+```
+
+#FOR PARTS W. 3+, 8 YEARS
+```{r}
+describeBy(datalogitFULL, group = datalogitFULL$cld8n3)
+```
+#Imputation
+#Not done yet lol
+
+#Running logit regressions
+```{r}
+#RMB THAT A = 1 and B = 0
+#First for 20 years all waves,,,
+#Uh I didn't do imputation though I guess I should have? so for now I just excluded NAs, which may contribute to the fit being so bad
+logitcld20 <- glm(cld20 ~ a1+f41+f1+residenc+dIncome+dLivarr+dPlace+ADLsum+gIll, data = datalogitFULL, family = "binomial", na.action = na.exclude)
+summary(logitcld20)
+#effect size /  R squared
+cld20null <- logitcld20$null.deviance/-2
+cld20proposed <- logitcld20$deviance/-2
+cld20R2 <- (cld20null - cld20proposed)/cld20null
+```
+
+```{r}
+logitcld20n3 <- glm(cld20n3 ~ a1+f41+f1+residenc+dIncome+dLivarr+dPlace+ADLsum+gIll, data = datalogitFULL, family = "binomial", na.action = na.exclude)
+summary(logitcld20n3)
+```
+```{r}
+logitcld8 <- glm(cld8 ~ a1+f41+f1+residenc+dIncome+dLivarr+dPlace+ADLsum+gIll, data = datalogitFULL, family = "binomial", na.action = na.exclude)
+summary(logitcld8)
+```
+
+```{r}
+logitcld8n3 <- glm(cld8n3 ~ a1+f41+f1+residenc+dIncome+dLivarr+dPlace+ADLsum+gIll, data = datalogitFULL, family = "binomial", na.action = na.exclude)
+summary(logitcld8n3)
+```
+
+
+
+
+#turning e1-6 into a factor 
+#data$e1 <- as.factor(data$e1)
+#data$e2 <- as.factor(data$e2)
+#data$e3 <- as.factor(data$e3)
+#data$e4 <- as.factor(data$e4)
+#data$e5 <- as.factor(data$e5)
+#data$e6 <- as.factor(data$e6)
+
+
+#replacing without assistance into independent / any assistance into dependent for e1-6
+#data$e1 <- fct_collapse(data$e1, "independent" = c("1"), "dependent" = c("2", "3"))
+#data$e2 <- fct_collapse(data$e2, "independent" = c("1"), "dependent" = c("2", "3"))
+#data$e3 <- fct_collapse(data$e3, "independent" = c("1"), "dependent" = c("2", "3"))
+#data$e4 <- fct_collapse(data$e4, "independent" = c("1"), "dependent" = c("2", "3"))
+#data$e5 <- fct_collapse(data$e5, "independent" = c("1"), "dependent" = c("2", "3"))
+#data$e6 <- fct_collapse(data$e6, "independent" = c("1"), "dependent" = c("2", "3"))
+```
+
+#uhhhhhh getting the classification data
+```{r
+#cld20clust <- as.data.frame(getClusters(cld20, 2), row.names = cld20@idAll)
+#cld20n3clust <- as.data.frame(getClusters(cld20n3, 2), row.names = cld20n3@idAll)
+#cld8clust <- as.data.frame(getClusters(cld8, 2), row.names = cld8@idAll)
+#cld8n3clust <- as.data.frame(getClusters(cld8n3, 2), row.names = cld8n3@idAll)
+
+
